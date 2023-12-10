@@ -1,0 +1,325 @@
+---
+title: "1.1 data wrangling"
+author: "TG"
+date: "2023-12-10"
+output:
+   prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+
+```{r message=TRUE, warning=TRUE, include=FALSE}
+
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(Hmisc)
+library(rfishbase)
+library(lubridate)
+
+select <- dplyr::select
+rename <-dplyr::rename
+```
+
+# Fish data wrangling
+
+load data
+
+```{r}
+# clean and orgenise data from 2015-2021
+
+load("G:/My Drive/PHD/Ecocamp-2022/data/until 2021/fish_full_data.Rdata") # old data
+
+# new fish data from fall 2022
+
+EcoCamp_2022_raw <- read_csv("data/2022/EcoCamp 2022.csv")
+
+data_2022<-EcoCamp_2022_raw
+```
+
+
+```{r}
+
+# change firsy/second observer to the observer name
+
+data_2022$Observer <- ifelse(data_2022$Observer == "first", 
+                            data_2022$`First Observer.x`,
+                            data_2022$`Second Observer.x`)
+
+# keep only relevant column
+
+data_2022 <- data_2022 %>%
+  rename(Site = Location, Abundance = Amount) %>%
+  mutate(Date = ymd(Date),Year = year(Date)) %>% 
+  select(Site,Knoll,Year,Date,Observer,Species, Abundance, Length,Confidence)
+
+# convert column types 
+
+data_2022$Site = as.character(data_2022$Site) 
+data_2022$Year = as.character(data_2022$Year) 
+data_2022$Knoll = as.character(data_2022$Knoll)
+# change site name to NR
+
+data_2022$Site[data_2022$Site == "Reserve"] = "NR"
+
+# In cases where there is no confidance convert to 0 
+
+data_2022$Confidence[is.na(data_2022$Confidence)]<-0
+
+```
+
+
+Insert correction to knolls number
+
+knoll 21 in Princess should change to 22 after the storm (2020)
+knoll 10 in the Princess should change to 23 after the storm (2020)
+
+Those knoll was documented under the same knoll but the knoll was destroy in the storm and we actually surveyed different knoll!
+
+
+```{r}
+
+data_2022$Knoll<-ifelse(data_2022$Site =="Princess" & data_2022$Knoll =="21",22,data_2022$Knoll)
+
+data_2022$Knoll<-ifelse(data_2022$Site =="Princess" & data_2022$Knoll =="10",23,data_2022$Knoll)
+
+```
+
+
+check species names to match fish full data and the updated name accurding to fishbase
+
+
+```{r}
+# list of distinct species
+
+sp_2022<-data_2022 %>% distinct(Species)
+
+# check which fish are valdiate accurding to fishbase
+
+valid_name <-validate_names(sp_2022$Species)
+
+sp_2022$valid<-ifelse(sp_2022$Species %in% valid_name,"valid","not valid")
+
+# remove valid species and sp/spp observations
+
+species_v<-sp_2022 %>% filter(sp_2022$valid == "not valid")
+species_v<-species_v %>% filter(str_detect(species_v$Species,"spp")==F)
+species_v<-species_v %>% filter(str_detect(species_v$Species,"sp.")==F)
+ 
+# match to the new and accepted name
+
+new_name<-species_v$Species %>% synonyms() %>% 
+ select(provided_name = synonym, valid_name = Species, Comment = Status) %>% 
+  filter(Comment == "synonym") %>% rename(Species = provided_name)
+
+# join and replace the previos name
+
+data_2022<-left_join(data_2022,new_name,by="Species")
+
+data_2022$Species<-ifelse(!is.na(data_2022$valid_name),
+                                data_2022$valid_name,
+                                data_2022$Species)
+
+data_2022<-data_2022[,1:9]
+
+```
+
+change species that are found in diffrent distribtion range to the local species
+
+```{r}
+data_2022$Species[data_2022$Species == "Dascyllus aruanus"]<-"Dascyllus abudafur"
+data_2022$Species[data_2022$Species == "Macropharyngodon bipartitus"]<-"Macropharyngodon marisrubri"
+data_2022$Species[data_2022$Species == "Aetobatus narinari"]<-"Aetobatus ocellatus"
+data_2022$Species[data_2022$Species == "Amblyglyphidodon leucogaster"]<-"Amblyglyphidodon indicus"
+data_2022$Species[data_2022$Species == "Parapriacanthus ransonneti"]<-"Parapriacanthus guentheri"
+data_2022$Species[data_2022$Species == "Eviota sebreei"]<-"Eviota punyit"
+data_2022$Species[data_2022$Species == "Eviota prasites"]<-"Eviota zebrina"
+data_2022$Species[data_2022$Species == "Canthigaster coronata"]<-"Canthigaster cyanospilota"
+data_2022$Species[data_2022$Species == "Hemigymnus fasciatus"]<-"Hemigymnus sexfasciatus"
+
+```
+
+check which species are new compared to the data collected up to 2021
+
+```{r}
+
+sp_2022<-data_2022 %>% distinct(Species)
+
+sp_all<-fish_full_data%>% distinct(Species,.keep_all = T) %>% select(Species,Species_2015,Family,Status,a,b)
+
+sp_2022$Species[which(!sp_2022$Species %in% sp_all$Species)]
+
+```
+
+* `Pycnochromis dimidiatus` - updated name, need to change in the full data
+* `Stegastes lacrymatus` - updated name, need to change in the full data
+* `Gymnothorax johnsoni`,`Gymnomuraena zebra` and `Caesio suevica` - new species in the data
+
+
+change the updated names in fish_full_data
+
+```{r}
+
+fish_full_data$Species[fish_full_data$Species == "Chromis dimidiata"]<-"Pycnochromis dimidiatus"
+fish_full_data$Species[fish_full_data$Species == "Plectroglyphidodon lacrymatus"]<-"Stegastes lacrymatus"
+
+
+
+```
+
+add family, coefficient and transient/reef associated status to the species
+
+
+```{r}
+sp_all<-fish_full_data%>% distinct(Species,.keep_all = T) %>% select(Species,Species_2015,Family,Status,a,b)
+
+sp_2022<-left_join(sp_2022,sp_all)
+
+```
+
+Fill in the missing data for the 3 species
+
+*I'll add the a and b later (when fishbase will work)*
+
+```{r}
+sp_2022$Species_2015<-ifelse(sp_2022$Species == "Gymnothorax johnsoni"|
+                               sp_2022$Species == "Gymnomuraena zebra",
+                             "Muraenidae",
+                             sp_2022$Species_2015)
+
+
+
+sp_2022$Family<-ifelse(sp_2022$Species == "Gymnothorax johnsoni"|
+                         sp_2022$Species == "Gymnomuraena zebra",
+                             "Muraenidae",
+                             sp_2022$Family)
+
+
+sp_2022$Status<-ifelse(sp_2022$Species == "Gymnothorax johnsoni"|
+                         sp_2022$Species == "Gymnomuraena zebra",
+                             "C",
+                             sp_2022$Status)
+
+
+
+sp_2022$Species_2015<-ifelse(sp_2022$Species == "Caesio suevica",
+                             "Caesio spp.",
+                             sp_2022$Species_2015)
+
+
+
+sp_2022$Family<-ifelse(sp_2022$Species == "Caesio suevica",
+                             "Caesionidae",
+                             sp_2022$Family)
+
+
+sp_2022$Status<-ifelse(sp_2022$Species == "Caesio suevica",
+                             "T",
+                             sp_2022$Status)
+
+
+```
+
+
+```{r}
+data_2022<-left_join(data_2022,sp_2022)
+```
+
+Add `survey_id` and `year_month` columns
+
+```{r}
+
+data_2022<-data_2022 %>%  mutate("survey_id"= paste(Site,Knoll,Date,sep = "_"),.after = Date)
+
+data_2022 <- data_2022 %>%  mutate("year_month"= paste(data_2022$Year,"b",sep=" "),.after = Date)
+
+data_2022 <- data_2022 %>% relocate(9:11,.after = Family)
+
+```
+
+remove new surveyor data:
+
+
+```{r}
+unique(data_2022$Observer)
+
+to_remove<-c("Yuval Goth","Inbar Dahan","Dana Kruger","Roi Holzman")
+
+data_2022 <- data_2022 %>% filter(!Observer %in% to_remove)
+
+```
+
+
+# for assaf
+
+
+```{r}
+
+old_data<-fish_full_data %>% select(colnames(data_2022))
+
+assaf_fish<-bind_rows(old_data,data_2022)
+
+one_observer<-list()
+loop<-1
+set.seed(1)
+
+for (i in unique(assaf_fish$survey_id)) {
+  
+  data <- assaf_fish %>% filter(survey_id == i)
+  
+  obs_amount <- length(unique(data$Observer))
+  obs_name <- unique(data$Observer)
+  chosen_obs <- sample(obs_name,1)  
+ 
+  filter_data<-data %>% filter(Observer == chosen_obs)
+  one_observer[[loop]]<-filter_data
+  loop<-loop+1
+  
+  
+}
+
+assaf_fish<- bind_rows(one_observer)
+
+rm(data,filter_data)
+```
+
+
+
+
+```{r}
+assaf_fish$Year<-as.numeric(assaf_fish$Year)
+
+
+assaf_fish <- assaf_fish %>%
+  filter(Year > 2017,Confidence <1) %>%
+  filter(! Knoll %in% c("Tamar",
+                    "South bridge reserve",
+                    "south bridge reserve",
+                    "North bridge reserve",
+                    "north bridge reserve"))
+
+assaf_fish_per_knoll<-assaf_fish %>%
+  group_by(Site,Knoll,year_month,Species) %>%
+  summarise("Abundance" = sum(Abundance))
+
+
+assaf_fish_per_site<-assaf_fish %>%
+  group_by(Site,year_month,Species) %>%
+  summarise("Abundance" = sum(Abundance))
+
+assaf_fish_per_year <-assaf_fish %>%
+  group_by(year_month,Species) %>%
+  summarise("Abundance" = sum(Abundance))
+
+
+write.csv(assaf_fish,"assaf_fish.csv")
+write.csv(assaf_fish_per_knoll,"assaf_fish_per_knoll.csv")
+write.csv(assaf_fish_per_site,"assaf_fish_per_site.csv")
+write.csv(assaf_fish_per_year,"assaf_fish_per_year.csv")
+
+
+
+```
+
+
