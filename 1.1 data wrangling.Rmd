@@ -22,6 +22,215 @@ select <- dplyr::select
 rename <-dplyr::rename
 ```
 
+# Coral data wrangling
+
+load data
+
+```{r}
+# old data until 2021
+
+load("G:/My Drive/PHD/Ecocamp-2022/data/until 2021/coral_comm.RData")
+load("G:/My Drive/PHD/Ecocamp-2022/data/until 2021/coral_cover.RData")
+
+# knoll medata (don't change along the years)
+
+load("G:/My Drive/PHD/Ecocamp-2022/data/until 2021/knoll_mdata.RData")
+
+# data from 2022
+
+cpc_2022 <- read_csv("data/2022/cpc 2022.csv")
+
+```
+
+
+Shaping `cpc_2022` to the format of `coral_comm`
+
+```{r}
+
+
+comm_22<-cpc_2022
+
+# unify column names
+
+colnames(comm_22)<-c("site","knoll","Category","species","points")
+
+# some the number of point for each species
+
+comm_22<-comm_22 %>% group_by(site,knoll,Category,species) %>% summarise("points" = sum(points))
+
+# change to similar site names
+
+comm_22<-comm_22 %>% mutate(site = case_when(site == "CA"~"Caves",
+                                             site == "NR"~"NR",
+                                             site == "KA"~"Katza",
+                                             site == "PR"~"Princess",))
+
+
+# correct the knoll number in princess 
+
+
+comm_22$knoll<-ifelse(comm_22$site =="Princess" & comm_22$knoll =="21",22,comm_22$knoll)
+
+comm_22$knoll<-ifelse(comm_22$site =="Princess" & comm_22$knoll =="10",23,comm_22$knoll)
+
+# add new columns of year, storm and knoll id
+
+comm_22<-comm_22 %>%
+  mutate(year = rep(2022),.after = knoll) %>%
+  mutate(storm = rep("After"),.after = year) %>% 
+  mutate(knoll_id = paste(site,knoll,storm,sep = "_"),.after = storm)
+
+
+# unify category names
+
+a<-unique(comm_22$Category)
+b<-unique(coral_comm$Category)
+a[which(!a %in% b)]
+
+
+comm_22$Category[comm_22$Category == "Soft Corals"]<- "Soft Coral"
+comm_22$Category[comm_22$Category == "Coral"]<- "Stony Coral"
+comm_22$Category[comm_22$Category == "Tunicate"]<- "Ascidia"
+comm_22$Category[comm_22$Category == "Sea Anemone"]<- "Sea anemone"
+
+# rock appear in the data but not in the coral community data, ill remove it after joining
+
+rm("a","b")
+
+# unify species names
+
+a<-unique(comm_22$species)
+b<-unique(coral_comm$species)
+a[which(!a %in% b)]
+
+
+coral_comm$species[coral_comm$species == "Dipsastrea"]<- "Dipsastraea"
+coral_comm$species[coral_comm$species == "Paramontastrea"]<- "Paramontastraea"
+coral_comm$species[coral_comm$species == "Montastrea"]<- "Montastraea"
+
+
+comm_22$species[comm_22$species == "Stony Coral"]<- "Stony coral"
+comm_22$species[comm_22$species == "Sea Anemone"]<- "Sea anemone"
+comm_22$species[comm_22$species == "Oxypora"]<- "Oxyopora"
+comm_22$species[comm_22$species == "Siderastraea"]<- "Siderastrea"
+comm_22$species[comm_22$species == "Soft Coral"]<- "Soft coral"
+
+
+# join with knoll meta data
+
+knoll_mdata_join<-knoll_mdata %>% select(4:ncol(knoll_mdata))
+
+
+comm_22<-left_join(comm_22,knoll_mdata_join)
+
+# make sure columns are in the same order
+
+comm_22<-comm_22 %>% select(colnames(coral_comm))
+
+# united coral comm
+
+coral_community_updated_2022<-bind_rows(coral_comm,comm_22)
+
+#filter the rock which appear only in 2022 data
+
+coral_community_updated_2022<-coral_community_updated_2022 %>% filter(Category != "Rock")
+
+```
+
+
+Shaping `cpc_2022` to the format of `coral_cover`
+
+
+
+```{r}
+
+
+comm_22$Category<-sub(" ", ".", comm_22$Category)
+
+comm_22$Category[comm_22$Category=="Rock"]<-"Other"
+
+a<- unique(comm_22$Category)
+b<- colnames(coral_cover[6:17])
+
+a[which(!a %in% b)]
+b[which(!b %in% a)]
+
+rm("a","b")
+
+# calculate precentage
+
+cover_22<-comm_22 %>% select(-species)
+cover_22<-cover_22 %>% relocate(6:7,.after = ITM_Y)
+
+cover_22<-cover_22 %>% group_by(across(1:18)) %>% summarise(points = sum(points))
+
+
+cover_22<-cover_22 %>% group_by(across(1:17)) %>% mutate("knoll_sum" = sum(points)) %>% ungroup()
+
+
+cover_22<-cover_22 %>% mutate("precentage" = points*100/knoll_sum)
+
+cover_22 <-cover_22 %>% select(-points,-knoll_sum)
+
+# convert to wide format
+
+cover_22<-spread(cover_22,Category,precentage,fill = 0)
+
+# match the column names before Union 
+
+a<-colnames(cover_22)
+b<-colnames(coral_cover)
+
+a[which(!a %in% b)]
+b[which(!b %in% a)]
+
+cover_22<-cover_22 %>% rename(Site = site,
+                              Year = year,
+                              Knoll = knoll)
+
+cover_22<-cover_22 %>% mutate(Algae = rep(0),
+                              Corallimorpharia = rep(0),
+                              Echinoderms = rep(0),
+                              Mollusca = rep(0),
+                              Zoantharia = rep(0))
+
+cover_22<-cover_22 %>% select(colnames(coral_cover))
+
+
+rm("a","b")
+
+
+coral_cover_updated_2022<- bind_rows(coral_cover,cover_22)
+```
+
+### save coral data
+
+```{r}
+
+dir_2022<- "G:/My Drive/PHD/Ecocamp-2022/data/2022/clean coral data"
+dir_all<- "G:/My Drive/PHD/Ecocamp-2022/data/all years"
+
+# clean 2022 data
+
+save(cover_22,file = paste0(dir_2022,sep = "/coral_cover_22.Rdata"))
+save(comm_22,file = paste0(dir_2022,sep = "/coral_comm_22.Rdata"))
+
+
+# all data united
+
+save(coral_cover_updated_2022,
+     file = paste0(dir_all,sep = "/coral_cover_updated_2022.Rdata"))
+
+write.csv(coral_cover_updated_2022,file = paste0(dir_all,sep = "/coral_cover_updated_2022.csv"))
+
+save(coral_community_updated_2022,
+     file = paste0(dir_all,sep = "/coral_community_updated_2022.Rdata"))
+
+write.csv(coral_community_updated_2022,
+     file = paste0(dir_all,sep = "/coral_community_updated_2022.csv"))
+```
+
+
 # Fish data wrangling
 
 load data
@@ -33,9 +242,11 @@ load("G:/My Drive/PHD/Ecocamp-2022/data/until 2021/fish_full_data.Rdata") # old 
 
 # new fish data from fall 2022
 
-EcoCamp_2022_raw <- read_csv("data/2022/EcoCamp 2022.csv")
+EcoCamp_2022_raw <- read_csv("data/2022/fish ecocamp 2022.csv")
 
 data_2022<-EcoCamp_2022_raw
+
+
 ```
 
 
@@ -125,7 +336,7 @@ data_2022<-data_2022[,1:9]
 
 ```
 
-change species that are found in diffrent distribtion range to the local species
+change species that are found in different distribution range to the local species
 
 ```{r}
 data_2022$Species[data_2022$Species == "Dascyllus aruanus"]<-"Dascyllus abudafur"
@@ -219,6 +430,30 @@ sp_2022$Status<-ifelse(sp_2022$Species == "Caesio suevica",
                              sp_2022$Status)
 
 
+
+
+```
+
+
+
+add a and b coefficents manually
+
+```{r}
+# from fishbase
+
+sp_2022$a[sp_2022$Species=="Gymnomuraena zebra"]<- 0.00005	
+sp_2022$b[sp_2022$Species=="Gymnomuraena zebra"]<-3.760   
+
+# no coefficient in fishbase, used the one from the fishbase Bayesian model 
+
+sp_2022$a[sp_2022$Species=="Gymnothorax johnsoni"]<- 0.00047	
+sp_2022$b[sp_2022$Species=="Gymnothorax johnsoni"]<-3.28  
+
+
+# no coefficient in fishbase, used the one from the fishbase Bayesian model 
+
+sp_2022$a[sp_2022$Species=="Caesio suevica"]<- 0.01259	
+sp_2022$b[sp_2022$Species=="Caesio suevica"]<- 3.09  
 ```
 
 
@@ -236,6 +471,8 @@ data_2022 <- data_2022 %>%  mutate("year_month"= paste(data_2022$Year,"b",sep=" 
 
 data_2022 <- data_2022 %>% relocate(9:11,.after = Family)
 
+
+data_2022 <- data_2022 %>%  mutate("year_observer"= paste(Observer,Year,sep = "_"),.after = Confidence)
 ```
 
 remove new surveyor data:
@@ -248,7 +485,83 @@ to_remove<-c("Yuval Goth","Inbar Dahan","Dana Kruger","Roi Holzman")
 
 data_2022 <- data_2022 %>% filter(!Observer %in% to_remove)
 
+rm("sp_2022","new_name","sp_all","species_v")
 ```
+
+
+### add knoll metadata
+
+```{r}
+data_2022$storm <-rep("After")
+
+data_2022$knoll_id<-paste(data_2022$Site,data_2022$Knoll,data_2022$storm,sep="_")
+
+data_2022$Knoll<-as.numeric(data_2022$Knoll)
+
+data_2022<-left_join(data_2022,knoll_mdata)
+
+
+```
+
+* need to add lat and lon for knoll NR_18_after,Princess_23_After & Princess_22_After
+
+
+```{r}
+
+coral_add <- cover_22
+
+coral_add <- coral_add %>% mutate(coral_att = paste(Site,Knoll,Year,sep = "_"))
+
+
+coral_add <- coral_add %>% select(coral_att,Algae,Soft.Coral,Stony.Coral)
+
+coral_add <- coral_add %>% mutate(coral_cover = Soft.Coral+Stony.Coral)
+
+
+coral_add <- coral_add %>% rename(Soft_Coral = Soft.Coral,
+                                  Stony_Coral = Stony.Coral)
+
+data_2022<- data_2022 %>% mutate(coral_att = paste(Site,Knoll,Year,sep = "_"))
+
+
+data_2022<-left_join(data_2022,coral_add)
+
+data_2022<-data_2022 %>% select(colnames(fish_full_data))
+
+data_2022$Knoll<-as.character(data_2022$Knoll)
+
+fish_full_data_updated_2022<-bind_rows(fish_full_data,data_2022)
+
+
+```
+
+
+# save fish data
+
+
+```{r}
+save(fish_full_data_updated_2022,
+     file = paste0(dir_all,sep = "/fish_full_data_updated_2022.Rdata"))
+
+save(knoll_mdata,
+     file = paste0(dir_all,sep = "/knoll_mdata_updated_2022.Rdata"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # for assaf
@@ -313,10 +626,10 @@ assaf_fish_per_year <-assaf_fish %>%
   summarise("Abundance" = sum(Abundance))
 
 
-write.csv(assaf_fish,"assaf_fish.csv")
-write.csv(assaf_fish_per_knoll,"assaf_fish_per_knoll.csv")
-write.csv(assaf_fish_per_site,"assaf_fish_per_site.csv")
-write.csv(assaf_fish_per_year,"assaf_fish_per_year.csv")
+#write.csv(assaf_fish,"assaf_fish.csv")
+#write.csv(assaf_fish_per_knoll,"assaf_fish_per_knoll.csv")
+#write.csv(assaf_fish_per_site,"assaf_fish_per_site.csv")
+#write.csv(assaf_fish_per_year,"assaf_fish_per_year.csv")
 
 
 
